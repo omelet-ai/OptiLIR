@@ -1,0 +1,95 @@
+# 오믈렛 오픈소스 보안 점검 (PR, main push)
+# - 1단계(관찰 모드): 결과만 기록하고 빌드를 막지 않는다 (exit-code 0)
+# - 10/28 재진단 이후: CRITICAL 발견 시 실패하도록 전환 ("Grype 스캔" 단계 마지막 줄의 주석 해제)
+# - 취약점 스캔 방식은 공급망 가이드 p16 "SBOM으로 취약점 게이트를 만든다"를 따름 (SBOM 생성 → Grype 스캔)
+# - 버전 관리: action(checkout, sbom-action, upload-artifact), gitleaks 이미지 태그, GRYPE_VERSION을 분기 재평가 때 한 번에 확인한다
+# - 처리한 시크릿(폐기, 재발급 완료 또는 오탐)은 Summary 표의 지문을 레포 루트 .gitleaksignore에 한 줄씩 추가하면 다음 실행부터 나오지 않는다
+# - PR 신규 의존성 검토(dependency-review)는 비공개 레포에서 GitHub Advanced Security가 필요해 제외함 (과제 이후, 공개 전환 후 추가)
+name: oss-security-check
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  secret-scan:
+    name: 시크릿 스캔 (전체 커밋 이력)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+            detect --source=/repo --redact --exit-code=0 \
+            --report-format=json --report-path=/repo/gitleaks-report.json
+          {
+            echo "### Secret scan"
+            echo "발견 건수: $(jq length gitleaks-report.json)"
+            if [ "$(jq length gitleaks-report.json)" -gt 0 ]; then
+              echo ""
+              echo "| 규칙 | 파일 | 줄 | 커밋 | 지문 (.gitleaksignore용) |"
+              echo "|---|---|---|---|---|"
+              jq -r '.[] | "| \(.RuleID) | \(.File) | \(.StartLine) | \(.Commit[0:7]) | `\(.Fingerprint)` |"' gitleaks-report.json | head -n 50
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.json
+
+  vuln-scan:
+    name: 의존성 취약점 스캔 (SBOM 기반)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: SBOM 생성 (Syft)
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+      - name: Grype 설치 (버전 고정)
+        env:
+          GRYPE_VERSION: v0.120.1
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/anchore/grype/${GRYPE_VERSION}/install.sh" \
+            | sh -s -- -b "$HOME/.local/bin" "${GRYPE_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Grype 스캔 (관찰 모드)
+        run: |
+          grype sbom:sbom.cdx.json -o json --file grype-report.json
+          grype sbom:sbom.cdx.json -o table --file grype-report.txt
+          total=$(jq '.matches | length' grype-report.json)
+          by_severity=$(jq -r '[.matches[].vulnerability.severity] as $s | ["Critical", "High", "Medium", "Low", "Negligible", "Unknown"] | map(. as $k | {k: $k, n: ($s | map(select(. == $k)) | length)}) | map(select(.n > 0) | "\(.k) \(.n)") | join(", ")' grype-report.json)
+          # Summary 용량 한도(1MiB)를 넘지 않도록 표는 상위 100건만 붙이고, 전체는 grype-report 첨부 파일로 본다
+          {
+            echo "### Vulnerability scan"
+            if [ "$total" -gt 0 ]; then
+              echo "발견 건수: ${total} (${by_severity})"
+            else
+              echo "발견 건수: 0"
+            fi
+            echo ""
+            echo '```'
+            head -n 101 grype-report.txt
+            echo '```'
+            if [ "$(wc -l < grype-report.txt)" -gt 101 ]; then
+              echo "상위 100건만 표시. 전체 목록은 Artifacts의 grype-report 참고"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 차단 모드: 아래 주석을 풀면 CRITICAL이 있을 때 이 단계가 실패한다 (결과 기록과 첨부는 그대로 남음)
+          # grype sbom:sbom.cdx.json --fail-on critical -q -o table --file /dev/null
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: grype-report
+          path: |
+            sbom.cdx.json
+            grype-report.json
+            grype-report.txt
