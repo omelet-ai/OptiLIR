@@ -16,7 +16,7 @@ Dataset = "https://huggingface.co/datasets/omelet-ai/OptiLIR-Instruct-v1"
 [project.optional-dependencies]
 train = ["torch>=2.9", "transformers>=5.16", "accelerate>=1.14", "peft>=0.20", "trl>=1.12", "datasets>=5.0"]
 eval = ["torch>=2.9", "transformers>=5.16", "accelerate>=1.14", "peft>=0.20", "datasets>=5.0", "xgrammar>=0.2.3"]
-test = ["pytest>=8.3.4,<9"]
+test = ["pytest>=9.0.3,<10"]
 
 [build-system]
 requires = ["hatchling>=1.27"]
