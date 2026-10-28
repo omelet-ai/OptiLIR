@@ -104,23 +104,46 @@ This repository has:
 
 ## Install
 
-Python 3.11 or newer.
+The environment is managed with [uv](https://docs.astral.sh/uv/). `uv.lock` pins the versions the released
+adapters were tested with (see "Tested versions" under [Evaluate an adapter](#evaluate-an-adapter)), and
+`.python-version` selects Python 3.12, which uv downloads if it is missing. To get uv itself, run
+`pip install uv` or follow its [installation guide](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
 git clone https://github.com/omelet-ai/OptiLIR
 cd OptiLIR
+uv sync --extra test
+uv run pytest -q
+```
+
+`uv sync` creates `.venv` with the package (editable) and the extras you name:
+
+| Command | Adds | For |
+|---|---|---|
+| `uv sync --extra test` | pytest | the tests |
+| `uv sync --extra eval` | PyTorch, Transformers, Accelerate, PEFT, datasets, xgrammar | `scripts/evaluate.py` |
+| `uv sync --extra train` | PyTorch, Transformers, Accelerate, PEFT, TRL, datasets | `scripts/train_lora.py` |
+| `uv sync --all-extras` | all of the above | everything |
+
+Each `uv sync` leaves exactly the extras it names installed. Run the commands in this README with
+`uv run`, as shown, or activate the environment once with `. .venv/bin/activate` and drop the prefix. On
+Linux the locked PyTorch is the CUDA 12.8 build from PyPI, the build the adapters were tested with.
+Generation (`scripts/evaluate.py` without `--predictions`) and training need a CUDA GPU (the released
+adapters were trained and evaluated on 80 GB NVIDIA H100 and A100 GPUs); scoring with `--predictions`
+runs on CPU.
+
+Without uv (Python 3.11 or newer), pip installs the newest versions the extras allow instead of the locked
+ones:
+
+```bash
 python -m venv .venv
 . .venv/bin/activate
 pip install -e '.[test]'
 pytest -q
 ```
 
-The distribution is named `optilir`; the import name is `execution_llm`. The package itself needs
-only Pydantic. Extras: `eval` (PyTorch, Transformers, Accelerate, PEFT, datasets, xgrammar) for
-`scripts/evaluate.py`, `train` (PyTorch, Transformers, Accelerate, PEFT, TRL, datasets) for
-`scripts/train_lora.py`. Generation (`scripts/evaluate.py` without `--predictions`) and training need a
-CUDA GPU (the released adapters were trained and evaluated on 80 GB NVIDIA H100 and A100 GPUs);
-scoring with `--predictions` runs on CPU.
+The distribution is named `optilir`; the import name is `execution_llm`. The package itself needs only
+Pydantic.
 
 ## Prompts and grammars
 
@@ -170,7 +193,7 @@ scoring uses them). With it, `decide` reproduces each row's `gold_decision` from
 turns, and `scripts/evaluate.py` reports the `decision_match` of the model cards:
 
 ```bash
-export EXECUTION_LLM_REGISTRY="$(python -c 'from huggingface_hub import hf_hub_download
+export EXECUTION_LLM_REGISTRY="$(uv run --with huggingface_hub python -c 'from huggingface_hub import hf_hub_download
 print(hf_hub_download("omelet-ai/OptiLIR-Instruct-v1", "registry.json", repo_type="dataset"))')"
 ```
 
@@ -217,15 +240,15 @@ repository contains no solver client.
 ## Evaluate an adapter
 
 ```bash
-pip install -e '.[eval]'
+uv sync --extra eval
 # for decision_match, set EXECUTION_LLM_REGISTRY first (see "Ground the IR into a decision")
 
 # Qwen3-8B adapter
-python scripts/evaluate.py --dataset omelet-ai/OptiLIR-Instruct-v1 --split test \
+uv run python scripts/evaluate.py --dataset omelet-ai/OptiLIR-Instruct-v1 --split test \
   --adapter omelet-ai/OptiLIR-Qwen3-8B --base Qwen/Qwen3-8B --grammar --shuffle
 
 # Gemma 4 12B adapter
-python scripts/evaluate.py --dataset omelet-ai/OptiLIR-Instruct-v1 --split test \
+uv run python scripts/evaluate.py --dataset omelet-ai/OptiLIR-Instruct-v1 --split test \
   --adapter omelet-ai/OptiLIR-Gemma-4-12B --base google/gemma-4-12B-it \
   --base-class Gemma4UnifiedForConditionalGeneration --attn eager --grammar --shuffle
 ```
@@ -238,13 +261,14 @@ with eager attention.
 
 Tested versions: both adapters were trained, and their card outputs generated, with PyTorch 2.9.1
 (CUDA 12.8 build), Transformers 5.16.1, PEFT 0.20.0, TRL 1.12.0, Accelerate 1.14.0, Datasets 5.0.1
-and xgrammar 0.2.3 (Tokenizers 0.23.1 for Gemma 4, 0.23.3 for Qwen3-8B). The extras set lower bounds
-only, so a fresh install gets newer, untested versions (current PyTorch wheels default to CUDA 13,
-which needs a recent NVIDIA driver).
+and xgrammar 0.2.3 (Tokenizers 0.23.1 for Gemma 4, 0.23.3 for Qwen3-8B). `uv.lock` pins these, with
+Tokenizers 0.23.1. The extras themselves set lower bounds only, so pip, or uv without the lock, gets
+newer, untested versions (current PyTorch wheels default to CUDA 13, which needs a recent NVIDIA driver).
 
 `--predictions FILE` scores outputs produced elsewhere (for example with vLLM, as
 shown on the model cards) instead of generating; each line is `{"id": ..., "output": ...}`. Scoring
-alone needs only `pip install -e . datasets`.
+alone needs only the package and datasets: `uv run --with datasets python scripts/evaluate.py ...`, or
+`pip install -e . datasets`.
 
 Per row the script reports `parse` (the IR parser in this package accepts the output; `parse_rate` in
 `metrics.json`, Parse rate on the cards) and `ir_match` (the output equals the gold IR once both are in
@@ -268,23 +292,23 @@ follow its declarations. The raw generations are written to `eval_<split>/output
 ## Train an adapter
 
 ```bash
-pip install -e '.[train]'
+uv sync --extra train
 
 # Qwen3-8B on 2 GPUs (2 per device x ACCUM 4 x 2 GPUs = 16, the released adapter's effective batch)
 DATASET=omelet-ai/OptiLIR-Instruct-v1 OUT=runs/qwen3-8b \
-  torchrun --nproc_per_node=2 scripts/train_lora.py
+  uv run torchrun --nproc_per_node=2 scripts/train_lora.py
 
 # Gemma 4 12B on 3 GPUs (2 per device x ACCUM 3 x 3 GPUs = 18, as the released adapter)
 DATASET=omelet-ai/OptiLIR-Instruct-v1 OUT=runs/gemma-4-12b ACCUM=3 \
   BASE_MODEL=google/gemma-4-12B-it BASE_CLASS=Gemma4UnifiedForConditionalGeneration LOSS_TYPE=nll \
   TARGET_MODULES='^.*language_model.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)$' \
-  torchrun --nproc_per_node=3 scripts/train_lora.py
+  uv run torchrun --nproc_per_node=3 scripts/train_lora.py
 ```
 
 LoRA rank 32, alpha 64, dropout 0.05 on the attention and MLP projections; 3 epochs, learning rate
 1e-4 with a cosine schedule and 10 warmup steps, bf16, maximum length 4096 tokens, seed 41; the loss is
 computed on the IR tokens only. The adapter is saved to `OUT/final`. See the docstring of
-`scripts/train_lora.py` (or `python scripts/train_lora.py --help`) for every setting, and "Tested
+`scripts/train_lora.py` (or `uv run python scripts/train_lora.py --help`) for every setting, and "Tested
 versions" above for the library versions.
 
 ## Scope and limitations
