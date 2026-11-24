@@ -19,12 +19,16 @@ When EXECUTION_LLM_REGISTRY names a capability registry, also decision_match (th
 equals `gold_decision`) and the outcome class; a registry that does not load stops the run before
 generation. A row whose output cannot be parsed or grounded is scored as parse_error or ground_error,
 and one whose `gold_decision` the registry rejects as gold_rejected. Writes the raw generations to
-OUT/outputs.jsonl (the --predictions format) before scoring, then OUT/predictions.jsonl and OUT/metrics.json.
+OUT/outputs.jsonl (the --predictions format) before scoring, then OUT/predictions.jsonl, OUT/cases.csv and
+OUT/metrics.json. A grounded row in predictions.jsonl carries both decisions that were compared (`decision`,
+`gold_decision`) and `differs`, the top-level fields of the decision whose values are not equal; cases.csv
+is the same rows as a table without the long fields, for checking single rows by hand.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from collections import Counter, defaultdict
@@ -154,16 +158,34 @@ def score(rows, outputs) -> list[dict]:
         except Exception as error:  # GroundingError (a ValueError), or anything else this output trips
             rec["outcome"], rec["error"] = "ground_error", f"{type(error).__name__}: {error}"[:200]
             continue
-        rec["decision"] = decision
-        rec["decision_match"] = jcs(decision) == jcs(row["gold_decision"])
+        gold_decision = row["gold_decision"]
+        rec["decision"], rec["gold_decision"] = decision, gold_decision
+        rec["decision_match"] = jcs(decision) == jcs(gold_decision)
+        rec["differs"] = sorted(
+            key for key in set(decision) | set(gold_decision) if jcs(decision.get(key)) != jcs(gold_decision.get(key))
+        )
         inputs = domain_inputs(domain)
         try:
-            gold = bodies.validate_python(row["gold_decision"])
+            gold = bodies.validate_python(gold_decision)
             grade = grade_turn(jcs(decision).encode(), gold, inputs.snapshot, inputs.signature, domain=domain)
             rec["outcome"] = grade.outcome
         except ValueError as error:  # the supplied registry rejects this row's gold_decision
             rec["outcome"], rec["error"] = "gold_rejected", f"{type(error).__name__}: {error}"[:200]
     return results
+
+
+CASE_COLUMNS = ["id", "domain", "language", "decision_kind", "predicted_kind", "parse", "ir_match"]
+CASE_COLUMNS += ["decision_match", "differs", "outcome", "error"]
+
+
+def write_cases(results, path: Path) -> None:
+    """One line per row for checking by hand: what was expected, what came out and where they differ."""
+    with path.open("w", newline="", encoding="utf-8-sig") as f:  # utf-8-sig: spreadsheets read the Korean
+        table = csv.DictWriter(f, CASE_COLUMNS, extrasaction="ignore")
+        table.writeheader()
+        for rec in results:
+            kind, differs = rec.get("decision", {}).get("kind"), ", ".join(rec.get("differs", []))
+            table.writerow({**rec, "predicted_kind": kind, "differs": differs})
 
 
 def summarize(results) -> dict:
@@ -232,6 +254,7 @@ def main() -> None:
     with (out / "predictions.jsonl").open("w", encoding="utf-8") as f:
         for rec in results:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    write_cases(results, out / "cases.csv")
     metrics = summarize(results)
     (out / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps({"split": args.split, **metrics["all"]}, ensure_ascii=False))

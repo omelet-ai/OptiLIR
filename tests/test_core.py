@@ -3,6 +3,7 @@ the grounding contracts over an independently authored, deliberately tiny regist
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import subprocess
@@ -390,7 +391,7 @@ def _evaluate_script():
     return evaluate
 
 
-def test_evaluation_scores_a_gold_the_registry_rejects_per_row(registry_path):
+def test_evaluation_scores_a_gold_the_registry_rejects_per_row(registry_path, tmp_path):
     from execution_llm.grounding.decide import domain_inputs
 
     domain_inputs.cache_clear()
@@ -405,8 +406,19 @@ def test_evaluation_scores_a_gold_the_registry_rejects_per_row(registry_path):
     }
     row = {"id": "t", "domain": "routing", "decision_kind": "execute", "stratum": "t", "language": "en"}
     row |= {"ir": ir, "messages": [{"role": "user", "content": "x"}], "gold_decision": gold}
-    [result] = _evaluate_script().score([row], [ir])
+    evaluate = _evaluate_script()
+    [result] = evaluate.score([row], [ir])
     assert result["outcome"] == "gold_rejected" and result["ir_match"]
+    # the row keeps both decisions and names where they differ; cases.csv is the same row as a table
+    assert result["gold_decision"] == gold and result["differs"] == ["objectives"] and not result["decision_match"]
+    evaluate.write_cases([result], tmp_path / "cases.csv")
+    with (tmp_path / "cases.csv").open(encoding="utf-8-sig", newline="") as f:
+        [case] = csv.DictReader(f)
+    assert case | {"error": ""} == {
+        "id": "t", "domain": "routing", "language": "en", "decision_kind": "execute", "predicted_kind": "execute",
+        "parse": "True", "ir_match": "True", "decision_match": "False", "differs": "objectives",
+        "outcome": "gold_rejected", "error": "",
+    }
 
 
 def test_evaluation_stops_before_generation_when_the_registry_does_not_load(tmp_path, monkeypatch):

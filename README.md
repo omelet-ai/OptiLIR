@@ -287,7 +287,9 @@ cannot be parsed or grounded) / `gold_rejected` (the supplied registry rejects t
 generation. With the dataset's `registry.json` these match the model cards; with another registry they
 follow its declarations. The raw generations are written to `eval_<split>/outputs.jsonl` before scoring
 (rescore them with `--predictions`); the scored rows go to `predictions.jsonl` and the totals to
-`metrics.json`.
+`metrics.json`. Each grounded row keeps the two decisions that were compared (`decision`, `gold_decision`)
+and `differs`, the top-level fields where they are not equal; `cases.csv` lists the same rows as a table
+for checking single rows by hand.
 
 ## Train an adapter
 
