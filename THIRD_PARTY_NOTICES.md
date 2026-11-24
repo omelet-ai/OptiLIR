@@ -14,7 +14,7 @@ the ones pinned in `uv.lock`.
 | trl | 1.12.0 | Apache-2.0 | `train` |
 | datasets | 5.0.1 | Apache-2.0 | `train`, `eval` |
 | xgrammar | 0.2.3 | Apache-2.0 | `eval` |
-| pytest | 8.3.4 | MIT | `test` |
+| pytest | 9.1.1 | MIT | `test` |
 
 Their own dependencies are pinned in `uv.lock`. On Linux, torch pulls in NVIDIA CUDA runtime libraries
 (`nvidia-*-cu12`), most of which are under NVIDIA's proprietary license. The SBOM that the
